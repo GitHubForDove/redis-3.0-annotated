@@ -439,7 +439,7 @@ sds sdscatlen(sds s, const void *t, size_t len) {
     if (s == NULL) return NULL;
 
     // 复制 t 中的内容到字符串后部
-    // T = O(N)
+    // T = O(N) 将指针移动到相应的位置
     sh = (void*) (s-(sizeof(struct sdshdr)));
     memcpy(s+curlen, t, len);
 
@@ -624,6 +624,7 @@ int sdsull2str(char *s, unsigned long long v) {
  */
 // 根据输入的 long long 值 value ，创建一个 SDS
 sds sdsfromlonglong(long long value) {
+    //新建一个bu字符数组  然后通过sdsll2str填入long long value的值 返回长度大小
     char buf[SDS_LLSTR_SIZE];
     int len = sdsll2str(buf,value);
 
@@ -986,6 +987,8 @@ int sdscmp(const sds s1, const sds s2) {
     l1 = sdslen(s1);
     l2 = sdslen(s2);
     minlen = (l1 < l2) ? l1 : l2;
+    // memcmp函数的原型为 int memcmp(const void *str1, const void *str2, size_t n));
+    // 其功能是把存储区 str1 和存储区 str2 的前 n 个字节进行比较。
     cmp = memcmp(s1,s2,minlen);
 
     if (cmp == 0) return l1-l2;
@@ -1023,6 +1026,7 @@ int sdscmp(const sds s1, const sds s2) {
  * T = O(N^2)
  */
 sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count) {
+    // slots为什么是5？
     int elements = 0, slots = 5, start = 0, j;
     sds *tokens;
 
@@ -1048,6 +1052,7 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
             tokens = newtokens;
         }
         /* search the separator */
+        // 搜索分隔符
         // T = O(N)
         if ((seplen == 1 && *(s+j) == sep[0]) || (memcmp(s+j,sep,seplen) == 0)) {
             tokens[elements] = sdsnewlen(s+start,j-start);

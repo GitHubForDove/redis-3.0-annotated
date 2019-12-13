@@ -1032,6 +1032,7 @@ void activeExpireCycle(int type) {
 }
 
 unsigned int getLRUClock(void) {
+    // UNIX时间 / 单位 & REDIS_LRU_CLOCK_MAX
     return (mstime()/REDIS_LRU_CLOCK_RESOLUTION) & REDIS_LRU_CLOCK_MAX;
 }
 

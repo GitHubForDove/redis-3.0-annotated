@@ -83,7 +83,9 @@ static int checkStringLength(redisClient *c, long long size) {
  */
 
 #define REDIS_SET_NO_FLAGS 0
+// REDIS_SET_NX 1   命令在指定的 key 不存在时，为 key 设置指定的值。
 #define REDIS_SET_NX (1<<0)     /* Set if key not exists. */
+// REDIS_SET_XX 2   命令在指定的 key 存在时，为 key 设置指定的值。
 #define REDIS_SET_XX (1<<1)     /* Set if key exists. */
 
 void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
@@ -95,6 +97,7 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
 
         // 取出 expire 参数的值
         // T = O(N)
+        // 将expire过期时间 赋值给 milliseconds
         if (getLongLongFromObjectOrReply(c, expire, &milliseconds, NULL) != REDIS_OK)
             return;
 
@@ -180,16 +183,19 @@ void setCommand(redisClient *c) {
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
 }
 
+// 命令在指定的 key 不存在时，为 key 设置指定的值。 SETNX -->> SET if Not eXists
 void setnxCommand(redisClient *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setGenericCommand(c,REDIS_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
 }
 
+// Redis Setex 命令为指定的 key 设置值及其过期时间。如果 key 已经存在， SETEX 命令将会替换旧的值。
 void setexCommand(redisClient *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
 }
 
+// Redis Psetex 命令以毫秒为单位设置 key 的生存时间。
 void psetexCommand(redisClient *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
@@ -227,7 +233,7 @@ void getsetCommand(redisClient *c) {
     // 编码键的新值 c->argv[2]
     c->argv[2] = tryObjectEncoding(c->argv[2]);
 
-    // 将数据库中关联键 c->argv[1] 和新值对象 c->argv[2]
+    // 将数据库中关联键 c->argv[1] 和 新值对象 c->argv[2]
     setKey(c->db,c->argv[1],c->argv[2]);
 
     // 发送事件通知
@@ -237,6 +243,7 @@ void getsetCommand(redisClient *c) {
     server.dirty++;
 }
 
+//用 value 参数覆写(overwrite)给定 key 所储存的字符串值，从偏移量 offset 开始
 void setrangeCommand(redisClient *c) {
     robj *o;
     long offset;
@@ -482,9 +489,12 @@ void incrDecrCommand(redisClient *c, long long incr) {
     // 然后用新的值对象替换原来的值对象
     value += incr;
     new = createStringObjectFromLongLong(value);
+    // 如果o对象存在
     if (o)
+        // 覆盖掉原来的值对象
         dbOverwrite(c->db,c->argv[1],new);
     else
+        // 根据键key  添加新的值 到数据库中
         dbAdd(c->db,c->argv[1],new);
 
     // 向数据库发送键被修改的信号
@@ -542,6 +552,7 @@ void incrbyfloatCommand(redisClient *c) {
 
     // 进行加法计算，并检查是否溢出
     value += incr;
+    // isnan 判断是不是NAN值（not a number非法数字） isinf是否是无界的
     if (isnan(value) || isinf(value)) {
         addReplyError(c,"increment would produce NaN or Infinity");
         return;
@@ -550,8 +561,10 @@ void incrbyfloatCommand(redisClient *c) {
     // 用一个包含新值的新对象替换现有的值对象
     new = createStringObjectFromLongDouble(value);
     if (o)
+        // 覆盖掉旧值
         dbOverwrite(c->db,c->argv[1],new);
     else
+        // 如果o对象不存在 新增
         dbAdd(c->db,c->argv[1],new);
 
     // 向数据库发送键被修改的信号
@@ -572,7 +585,9 @@ void incrbyfloatCommand(redisClient *c) {
     // 在传播 INCRBYFLOAT 命令时，总是用 SET 命令来替换 INCRBYFLOAT 命令
     // 从而防止因为不同的浮点精度和格式化造成 AOF 重启时的数据不一致
     aux = createStringObject("SET",3);
+    // 改写单个参数值  void rewriteClientCommandArgument(redisClient *c, int i, robj *newval)  i：第i个参数  newval：新的修改的值
     rewriteClientCommandArgument(c,0,aux);
+    // 减少引用计数 引用计数为0时  释放对象
     decrRefCount(aux);
     rewriteClientCommandArgument(c,2,new);
 }

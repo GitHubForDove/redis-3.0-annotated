@@ -687,7 +687,9 @@ void addReplyBulkLen(redisClient *c, robj *obj) {
  * 返回一个 Redis 对象作为回复
  */
 void addReplyBulk(redisClient *c, robj *obj) {
+    // 返回回复的redis对象长度
     addReplyBulkLen(c,obj);
+    // 回复消息
     addReply(c,obj);
     addReply(c,shared.crlf);
 }

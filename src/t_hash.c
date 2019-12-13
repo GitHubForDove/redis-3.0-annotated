@@ -349,7 +349,7 @@ int hashTypeDelete(robj *o, robj *field) {
             // 定位到域
             fptr = ziplistFind(fptr, field->ptr, sdslen(field->ptr), 1);
             if (fptr != NULL) {
-                // 删除域和值
+                // 删除域和值  因为键和值 是相连挨在一起的 所以当将键删除了 再进行删除就会将指针指向值的位置
                 zl = ziplistDelete(zl,&fptr);
                 zl = ziplistDelete(zl,&fptr);
                 o->ptr = zl;
@@ -766,6 +766,16 @@ void hsetnxCommand(redisClient *c) {
     }
 }
 
+/*
+ *  HMSET key field1 value1 [field2 value2 ]
+ *  同时将多个 field-value (域-值)对设置到哈希表 key 中。
+ * 
+ *  Redis Hmset 命令用于同时将多个 field-value (字段-值)对设置到哈希表中。
+
+    此命令会覆盖哈希表中已存在的字段。
+
+    如果哈希表不存在，会创建一个空哈希表，并执行 HMSET 操作。
+ */
 void hmsetCommand(redisClient *c) {
     int i;
     robj *o;
@@ -1028,6 +1038,7 @@ void hdelCommand(redisClient *c) {
 
         // 发送事件通知
         if (keyremoved)
+            // 通知哈希表 已经被删除了
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",c->argv[1],
                                 c->db->id);
 
@@ -1118,10 +1129,12 @@ void genericHgetallCommand(redisClient *c, int flags) {
     redisAssert(count == length);
 }
 
+// 获取哈希表中所有的字段
 void hkeysCommand(redisClient *c) {
     genericHgetallCommand(c,REDIS_HASH_KEY);
 }
 
+// 获取哈希表中所有值
 void hvalsCommand(redisClient *c) {
     genericHgetallCommand(c,REDIS_HASH_VALUE);
 }

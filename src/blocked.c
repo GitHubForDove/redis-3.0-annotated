@@ -145,6 +145,7 @@ void unblockClient(redisClient *c) {
     c->flags |= REDIS_UNBLOCKED;
     c->btype = REDIS_BLOCKED_NONE;
     server.bpop_blocked_clients--;
+    // 将本客户端加入到客户端未阻塞队列中
     listAddNodeTail(server.unblocked_clients,c);
 }
 

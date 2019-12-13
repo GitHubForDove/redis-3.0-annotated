@@ -80,6 +80,7 @@ void listTypePush(robj *subject, robj *value, int where) {
     listTypeTryConversion(subject,value);
 
     if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
+        // 判断现在压缩列表内的 entry个数 是否 已经大于等于 最大的entry个数
         ziplistLen(subject->ptr) >= server.list_max_ziplist_entries)
             listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
 
@@ -88,6 +89,7 @@ void listTypePush(robj *subject, robj *value, int where) {
         int pos = (where == REDIS_HEAD) ? ZIPLIST_HEAD : ZIPLIST_TAIL;
         // 取出对象的值，因为 ZIPLIST 只能保存字符串或整数
         value = getDecodedObject(value);
+        // 插入到压缩列表内
         subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos);
         decrRefCount(value);
 
@@ -565,6 +567,7 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
          * to do the actual insert), so we assume this value can be inserted
          * and convert the ziplist to a regular list if necessary. */
         // 看保存值 value 是否需要将列表编码转换为双端链表
+        // 如果不是ziplist编码  直接返回
         listTypeTryConversion(subject,val);
 
         /* Seek refval from head to tail */
@@ -1067,9 +1070,11 @@ void rpoplpushCommand(redisClient *c) {
         rpoplpushHandlePush(c,c->argv[2],dobj,value);
 
         /* listTypePop returns an object with its refcount incremented */
+        // value减少一个引用
         decrRefCount(value);
 
         /* Delete the source list when it is empty */
+        // 如果列表是空的 就直接删除
         notifyKeyspaceEvent(REDIS_NOTIFY_LIST,"rpop",touchedkey,c->db->id);
 
         // 如果源列表已经为空，那么将它删除
@@ -1175,6 +1180,7 @@ void blockForKeys(redisClient *c, robj **keys, int numkeys, mstime_t timeout, ro
             incrRefCount(keys[j]);
             redisAssertWithInfo(c,keys[j],retval == DICT_OK);
         } else {
+            // 找到阻塞key的值  返回的是一个链表
             l = dictGetVal(de);
         }
         // 将客户端填接到被阻塞客户端的链表中
@@ -1257,6 +1263,7 @@ void signalListAsReady(redisClient *c, robj *key) {
     rl->key = key;
     rl->db = c->db;
     incrRefCount(key);
+    // 将key添加到server.ready_keys集合中
     listAddNodeTail(server.ready_keys,rl);
 
     /* We also add the key in the db->ready_keys dictionary in order
@@ -1319,6 +1326,7 @@ int serveClientBlockedOnList(redisClient *receiver, robj *key, robj *dstkey, red
         argv[0] = (where == REDIS_HEAD) ? shared.lpop :
                                           shared.rpop;
         argv[1] = key;
+        // 向 AOF 或者 slave 传播修改的命令
         propagate((where == REDIS_HEAD) ?
             server.lpopCommand : server.rpopCommand,
             db->id,argv,2,REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL);
@@ -1342,6 +1350,8 @@ int serveClientBlockedOnList(redisClient *receiver, robj *key, robj *dstkey, red
             // 传播 RPOP 命令
             argv[0] = shared.rpop;
             argv[1] = key;
+
+            // 向 AOF 或者 slave 传播修改的命令
             propagate(server.rpopCommand,
                 db->id,argv,2,
                 REDIS_PROPAGATE_AOF|
@@ -1467,6 +1477,7 @@ void handleClientsBlockedOnLists(void) {
                             {
                                 /* If we failed serving the client we need
                                  * to also undo the POP operation. */
+                                    // 如果失败了 需要重新将value推入到队列中
                                     listTypePush(o,value,where);
                             }
 
@@ -1489,6 +1500,7 @@ void handleClientsBlockedOnLists(void) {
             /* Free this item. */
             decrRefCount(rl->key);
             zfree(rl);
+            // 删除临时创建的 list l 和 readylist ln
             listDelNode(l,ln);
         }
         listRelease(l); /* We have the new list on place at this point. */
@@ -1501,7 +1513,7 @@ void blockingPopGenericCommand(redisClient *c, int where) {
     mstime_t timeout;
     int j;
 
-    // 取出 timeout 参数
+    // 取出 timeout 参数  最后一个参数为 timeout --->>> c-argv[c->argc-1]
     if (getTimeoutFromObjectOrReply(c,c->argv[c->argc-1],&timeout,UNIT_SECONDS)
         != REDIS_OK) return;
 
@@ -1531,7 +1543,7 @@ void blockingPopGenericCommand(redisClient *c, int where) {
                     addReplyMultiBulkLen(c,2);
                     // 回复弹出元素的列表
                     addReplyBulk(c,c->argv[j]);
-                    // 回复弹出值
+                    // 回复弹出值  将返回给客户端
                     addReplyBulk(c,value);
 
                     decrRefCount(value);

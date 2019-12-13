@@ -365,6 +365,7 @@ void listRewindTail(list *list, listIter *li) {
  */
 listNode *listNext(listIter *iter)
 {
+    // 将当前指针指向的结点赋值给current 使用current来遍历
     listNode *current = iter->next;
 
     if (current != NULL) {
@@ -403,6 +404,7 @@ listNode *listNext(listIter *iter)
  */
 list *listDup(list *orig)
 {
+    // 新建副本链表
     list *copy;
     listIter *iter;
     listNode *node;
@@ -423,6 +425,7 @@ list *listDup(list *orig)
 
         // 复制节点值到新节点
         if (copy->dup) {
+            // #define listGetDupMethod(l) ((l)->dup)
             value = copy->dup(node->value);
             if (value == NULL) {
                 listRelease(copy);
@@ -478,21 +481,24 @@ listNode *listSearchKey(list *list, void *key)
     while((node = listNext(iter)) != NULL) {
         
         // 对比
+        // 如果实现了match方法  根据match方法找到对应的node结点
         if (list->match) {
             if (list->match(node->value, key)) {
+                // 释放迭代器
                 listReleaseIterator(iter);
                 // 找到
                 return node;
             }
         } else {
             if (key == node->value) {
+                // 释放迭代器
                 listReleaseIterator(iter);
                 // 找到
                 return node;
             }
         }
     }
-    
+    // 释放迭代器
     listReleaseIterator(iter);
 
     // 未找到

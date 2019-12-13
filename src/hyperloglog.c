@@ -180,15 +180,16 @@
  */
 
 struct hllhdr {
-    char magic[4];      /* "HYLL" */
-    uint8_t encoding;   /* HLL_DENSE or HLL_SPARSE. */
-    uint8_t notused[3]; /* Reserved for future use, must be zero. */
-    uint8_t card[8];    /* Cached cardinality, little endian. */
-    uint8_t registers[]; /* Data bytes. */
+    char magic[4];      /* 魔术字符串，前面4个字节表示这是一个hll对象 "HYLL" */
+    uint8_t encoding;   /* 存储类型, 后面会讲到，分为HLL_DENSE or HLL_SPARSE两种存储方式 HLL_DENSE or HLL_SPARSE. */
+    uint8_t notused[3]; /* 保留三个字节未来可能会使用  Reserved for future use, must be zero. */
+    uint8_t card[8];    /* 缓存的当前hll对象的基数值 Cached cardinality, little endian. */
+    uint8_t registers[]; /* Data bytes. 对于dense存储方式，这里就是一个12k的连续数组，对于sparse存储方式，这里长度是不定的，后面会讲到*/
 };
 
 /* The cached cardinality MSB is used to signal validity of the cached value. */
 #define HLL_INVALIDATE_CACHE(hdr) (hdr)->card[0] |= (1<<7)
+// 判断hll缓存是否有效
 #define HLL_VALID_CACHE(hdr) (((hdr)->card[0] & (1<<7)) == 0)
 
 #define HLL_P 14 /* The greater is P, the smaller the error. */
@@ -360,6 +361,8 @@ static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected\r\n";
 
 /* Macros to access the sparse representation.
  * The macros parameter is expected to be an uint8_t pointer. */
+// 宏指令 用来访问 稀疏表现形式的对象
+// 宏指令的参数是一个 uint8_t 指针
 #define HLL_SPARSE_XZERO_BIT 0x40 /* 01xxxxxx */
 #define HLL_SPARSE_VAL_BIT 0x80 /* 1vvvvvxx */
 #define HLL_SPARSE_IS_ZERO(p) (((*(p)) & 0xc0) == 0) /* 00xxxxxx */
@@ -457,8 +460,11 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
      * This may sound like inefficient, but actually in the average case
      * there are high probabilities to find a 1 after a few iterations. */
     hash = MurmurHash64A(ele,elesize,0xadc83b19ULL);
+    // hash & （13348-1） 找到对应的index 桶的位置
     index = hash & HLL_P_MASK; /* Register index. */
+    // 确保count值小于 50
     hash |= ((uint64_t)1<<63); /* Make sure the loop terminates. */
+    // HLL_REGISTERS = 14
     bit = HLL_REGISTERS; /* First bit not used to address the register. */
     count = 1; /* Initialized to 1 since we count the "00000...1" pattern. */
     while((hash & bit) == 0) {
@@ -466,6 +472,7 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
         bit <<= 1;
     }
     *regp = (int) index;
+    // 返回连续的0有多少个  count也就是后面50位 第一次出现1的位置
     return count;
 }
 
@@ -487,8 +494,11 @@ int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
     long index;
 
     /* Update the register if this element produced a longer run of zeroes. */
+    // 如果这个元素加入后 导致有更长连续的0 更新register  
     count = hllPatLen(ele,elesize,&index);
+    // 找到对应的index获取其中的值
     HLL_DENSE_GET_REGISTER(oldcount,registers,index);
+    //如果新的值比老的大，就更新来的
     if (count > oldcount) {
         HLL_DENSE_SET_REGISTER(registers,index,count);
         return 1;
@@ -501,6 +511,7 @@ int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
  * PE is an array with a pre-computer table of values 2^-reg indexed by reg.
  * As a side effect the integer pointed by 'ezp' is set to the number
  * of zero registers. */
+// 计算一个统计直方图
 double hllDenseSum(uint8_t *registers, double *PE, int *ezp) {
     double E = 0;
     int j, ez = 0;
@@ -514,6 +525,7 @@ double hllDenseSum(uint8_t *registers, double *PE, int *ezp) {
                       r10, r11, r12, r13, r14, r15;
         for (j = 0; j < 1024; j++) {
             /* Handle 16 registers per iteration. */
+            // 每次循环处理16个redisters  计算第一次出现位置的统计直方图
             r0 = r[0] & 63; if (r0 == 0) ez++;
             r1 = (r[0] >> 6 | r[1] << 2) & 63; if (r1 == 0) ez++;
             r2 = (r[1] >> 4 | r[2] << 4) & 63; if (r2 == 0) ez++;
@@ -565,6 +577,9 @@ double hllDenseSum(uint8_t *registers, double *PE, int *ezp) {
  *
  * The function returns REDIS_OK if the sparse representation was valid,
  * otherwise REDIS_ERR is returned if the representation was corrupted. */
+/*
+ * 将稀疏存储升级为密集存储模式
+ *  */
 int hllSparseToDense(robj *o) {
     sds sparse = o->ptr, dense;
     struct hllhdr *hdr, *oldhdr = (struct hllhdr*)sparse;
@@ -572,19 +587,24 @@ int hllSparseToDense(robj *o) {
     uint8_t *p = (uint8_t*)sparse, *end = p+sdslen(sparse);
 
     /* If the representation is already the right one return ASAP. */
+    // 如果表现形式已经是密集存储 直接返回 OK
     hdr = (struct hllhdr*) sparse;
     if (hdr->encoding == HLL_DENSE) return REDIS_OK;
 
     /* Create a string of the right size filled with zero bytes.
      * Note that the cached cardinality is set to 0 as a side effect
      * that is exactly the cardinality of an empty HLL. */
+    // 创建基数为0 的dense
     dense = sdsnewlen(NULL,HLL_DENSE_SIZE);
     hdr = (struct hllhdr*) dense;
+    // copy magic 和 缓存基数
     *hdr = *oldhdr; /* This will copy the magic and cached cardinality. */
+    // 编码设置为 密集存储
     hdr->encoding = HLL_DENSE;
 
     /* Now read the sparse representation and set non-zero registers
      * accordingly. */
+    // 读取稀疏存储并赋值给密集存储
     p += HLL_HDR_SIZE;
     while(p < end) {
         if (HLL_SPARSE_IS_ZERO(p)) {
@@ -608,13 +628,17 @@ int hllSparseToDense(robj *o) {
 
     /* If the sparse representation was valid, we expect to find idx
      * set to HLL_REGISTERS. */
+    // 如果idx 不等于 HLL_REGISTERS 返回错误
+    // 释放掉赋值后的dense
     if (idx != HLL_REGISTERS) {
         sdsfree(dense);
         return REDIS_ERR;
     }
 
     /* Free the old representation and set the new one. */
+    // 将老的表现形式 释放掉
     sdsfree(o->ptr);
+    // 将对象的ptr属性 赋值为 dense
     o->ptr = dense;
     return REDIS_OK;
 }
@@ -646,6 +670,8 @@ int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
 
     /* If the count is too big to be representable by the sparse representation
      * switch to dense representation. */
+    // HLL_SPARSE_VAL_MAX_VALUE 32 如果count 大于hll对象稀疏编码存储编码的最大值32  
+    // 就去提升编码格式 将稀疏编码提升为压缩编码
     if (count > HLL_SPARSE_VAL_MAX_VALUE) goto promote;
 
     /* When updating a sparse representation, sometimes we may need to
@@ -653,6 +679,7 @@ int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
      * into XZERO-VAL-XZERO). Make sure there is enough space right now
      * so that the pointers we take during the execution of the function
      * will be valid all the time. */
+    // 给字符串分配空间
     o->ptr = sdsMakeRoomFor(o->ptr,3);
 
     /* Step 1: we need to locate the opcode we need to modify to check
@@ -815,6 +842,7 @@ int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
      int oldlen = is_xzero ? 2 : 1;
      int deltalen = seqlen-oldlen;
 
+    // 当sdslen + deltalen 大于 系统设置的最大字节数 就将稀疏矩阵 升级为 密集矩阵
      if (deltalen > 0 &&
          sdslen(o->ptr)+deltalen > server.hll_sparse_max_bytes) goto promote;
      if (deltalen && next) memmove(next+deltalen,next,end-next);
@@ -876,6 +904,7 @@ promote: /* Promote to dense representation. */
      * Note that this in turn means that PFADD will make sure the command
      * is propagated to slaves / AOF, so if there is a sparse -> dense
      * convertion, it will be performed in all the slaves as well. */
+    // spare向dense编码转换  同时将对其他的从结点进行传播 让其他的从结点也进行转换
     int dense_retval = hllDenseAdd(hdr->registers, ele, elesize);
     redisAssert(dense_retval == 1);
     return dense_retval;
@@ -885,6 +914,7 @@ promote: /* Promote to dense representation. */
  * PE is an array with a pre-computer table of values 2^-reg indexed by reg.
  * As a side effect the integer pointed by 'ezp' is set to the number
  * of zero registers. */
+// 计算稀疏表示下，所有寄存器的调和平均数
 double hllSparseSum(uint8_t *sparse, int sparselen, double *PE, int *ezp, int *invalid) {
     double E = 0;
     int ez = 0, idx = 0, runlen, regval;
@@ -964,6 +994,7 @@ double hllRawSum(uint8_t *registers, double *PE, int *ezp) {
  * is, hdr->registers will point to an uint8_t array of HLL_REGISTERS element.
  * This is useful in order to speedup PFCOUNT when called against multiple
  * keys (no need to work with 6-bit integers encoding). */
+// 核心方法  计算hll对象的基数个数
 uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
     double m = HLL_REGISTERS;
     double E, alpha = 0.7213/(1+1.079/m);
@@ -995,6 +1026,7 @@ uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
     }
 
     /* Muliply the inverse of E for alpha_m * m^2 to have the raw estimate. */
+    // 基数
     E = (1/E)*alpha*m*m;
 
     /* Use the LINEARCOUNTING algorithm for small cardinalities.
@@ -1002,6 +1034,7 @@ uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
      * used since linear counting error starts to increase. However HyperLogLog
      * shows a strong bias in the range 2.5*16384 - 72000, so we try to
      * compensate for it. */
+    // 对基数比较小的  使用线性回归函数
     if (E < m*2.5 && ez != 0) {
         E = m*log(m/ez); /* LINEARCOUNTING() */
     } else if (m == 16384 && E < 72000) {
@@ -1009,6 +1042,9 @@ uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
          * way we can compute the bias for a given cardinality and correct
          * according to it. Only apply the correction for P=14 that's what
          * we use and the value the correction was verified with. */
+        // 对这个范围的偏差做了多项式回归，这样我们就可以计算给定基数的偏差并根据它进行校正。
+        // 只对P=14进行校正，这是我们使用的，校正值是用 bias 
+        // 调和平均数能够适当修正算法误差   偏差参数
         double bias = 5.9119*1.0e-18*(E*E*E*E)
                       -1.4253*1.0e-12*(E*E*E)+
                       1.2940*1.0e-7*(E*E)
@@ -1024,8 +1060,10 @@ uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
 }
 
 /* Call hllDenseAdd() or hllSparseAdd() according to the HLL encoding. */
+// 添加的总结入口 判断是稀疏 还是 密集 然后进行对应的添加
 int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
     struct hllhdr *hdr = o->ptr;
+    // 判断编码方式
     switch(hdr->encoding) {
     case HLL_DENSE: return hllDenseAdd(hdr->registers,ele,elesize);
     case HLL_SPARSE: return hllSparseAdd(o,ele,elesize);
@@ -1041,6 +1079,7 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
  *
  * If the HyperLogLog is sparse and is found to be invalid, REDIS_ERR
  * is returned, otherwise the function always succeeds. */
+// 更新每个寄存器的最大值
 int hllMerge(uint8_t *max, robj *hll) {
     struct hllhdr *hdr = hll->ptr;
     int i;
@@ -1060,6 +1099,7 @@ int hllMerge(uint8_t *max, robj *hll) {
         i = 0;
         while(p < end) {
             if (HLL_SPARSE_IS_ZERO(p)) {
+                // 稀疏存储表示 0的个数
                 runlen = HLL_SPARSE_ZERO_LEN(p);
                 i += runlen;
                 p++;
@@ -1077,6 +1117,7 @@ int hllMerge(uint8_t *max, robj *hll) {
                 p++;
             }
         }
+        // 如果i不等于HLL_REGISTERS的值 返回错误
         if (i != HLL_REGISTERS) return REDIS_ERR;
     }
     return REDIS_OK;
@@ -1096,24 +1137,31 @@ robj *createHLLObject(void) {
                      HLL_SPARSE_XZERO_MAX_LEN)*2);
     int aux;
 
+    // opcodes 操作码
     /* Populate the sparse representation with as many XZERO opcodes as
      * needed to represent all the registers. */
     aux = HLL_REGISTERS;
     s = sdsnewlen(NULL,sparselen);
     p = (uint8_t*)s + HLL_HDR_SIZE;
     while(aux) {
+        // HLL_SPARSE_XZERO_MAX_LEN 16384
         int xzero = HLL_SPARSE_XZERO_MAX_LEN;
         if (xzero > aux) xzero = aux;
         HLL_SPARSE_XZERO_SET(p,xzero);
         p += 2;
         aux -= xzero;
     }
+    // 断言
     redisAssert((p-(uint8_t*)s) == sparselen);
 
     /* Create the actual object. */
+    // 创建实际的对象
     o = createObject(REDIS_STRING,s);
+    // o->pstr 指向hdr 对象
     hdr = o->ptr;
+    // 将hdr->magic 魔术码 设置为HYLL  用来标识HLL对象
     memcpy(hdr->magic,"HYLL",4);
+    // 设置编码形式
     hdr->encoding = HLL_SPARSE;
     return o;
 }
@@ -1132,9 +1180,11 @@ int isHLLObjectOrReply(redisClient *c, robj *o) {
     hdr = o->ptr;
 
     /* Magic should be "HYLL". */
+    // 检查Magic数组 是否是HYLL 
     if (hdr->magic[0] != 'H' || hdr->magic[1] != 'Y' ||
         hdr->magic[2] != 'L' || hdr->magic[3] != 'L') goto invalid;
 
+    // 检查编码是否 存在问题
     if (hdr->encoding > HLL_MAX_ENCODING) goto invalid;
 
     /* Dense representation string length should match exactly. */
@@ -1153,22 +1203,27 @@ invalid:
 
 /* PFADD var ele ele ele ... ele => :0 or :1 */
 void pfaddCommand(redisClient *c) {
+    // 为执行写入操作而取出键 key 在数据库 db 中的值。
     robj *o = lookupKeyWrite(c->db,c->argv[1]);
     struct hllhdr *hdr;
     int updated = 0, j;
 
+    // 如果对象为null 自己创建一个HLL对象 
     if (o == NULL) {
         /* Create the key with a string value of the exact length to
          * hold our HLL data structure. sdsnewlen() when NULL is passed
          * is guaranteed to return bytes initialized to zero. */
         o = createHLLObject();
+        // 尝试将键值对 key 和 val 添加到数据库中。
         dbAdd(c->db,c->argv[1],o);
         updated++;
     } else {
+        // 如果对象无法通过检验  直接返回 
         if (isHLLObjectOrReply(c,o) != REDIS_OK) return;
         o = dbUnshareStringValue(c->db,c->argv[1],o);
     }
     /* Perform the low level ADD operation for every element. */
+    // 将每个元素添加到hll对象中
     for (j = 2; j < c->argc; j++) {
         int retval = hllAdd(o, (unsigned char*)c->argv[j]->ptr,
                                sdslen(c->argv[j]->ptr));
@@ -1182,12 +1237,17 @@ void pfaddCommand(redisClient *c) {
         }
     }
     hdr = o->ptr;
+    // 如果updated 大于1 说明hll对象被修改过  调用系统的钩子
     if (updated) {
+        // 键空间改动的钩子。 每当数据库中的键被改动时， signalModifiedKey() 函数都会被调用。
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"pfadd",c->argv[1],c->db->id);
+        // 记录数据库被修改次数
         server.dirty++;
+        // 将缓存清掉
         HLL_INVALIDATE_CACHE(hdr);
     }
+    // 每次命令被实现 就会执行该方法
     addReply(c, updated ? shared.cone : shared.czero);
 }
 
@@ -1206,6 +1266,7 @@ void pfcountCommand(redisClient *c) {
         int j;
 
         /* Compute an HLL with M[i] = MAX(M[i]_j). */
+        // 将max数组初始化
         memset(max,0,sizeof(max));
         hdr = (struct hllhdr*) max;
         hdr->encoding = HLL_RAW; /* Special internal-only encoding. */
@@ -1239,6 +1300,7 @@ void pfcountCommand(redisClient *c) {
          * we would have a key as HLLADD creates it as a side effect. */
         addReply(c,shared.czero);
     } else {
+        // 判断是否是有效的HLL对象
         if (isHLLObjectOrReply(c,o) != REDIS_OK) return;
         o = dbUnshareStringValue(c->db,c->argv[1],o);
 
@@ -1246,6 +1308,7 @@ void pfcountCommand(redisClient *c) {
         hdr = o->ptr;
         if (HLL_VALID_CACHE(hdr)) {
             /* Just return the cached value. */
+            // 如果缓存有效  直接返回缓存值
             card = (uint64_t)hdr->card[0];
             card |= (uint64_t)hdr->card[1] << 8;
             card |= (uint64_t)hdr->card[2] << 16;
@@ -1257,11 +1320,13 @@ void pfcountCommand(redisClient *c) {
         } else {
             int invalid = 0;
             /* Recompute it and update the cached value. */
+            // 计算基数的个数
             card = hllCount(hdr,&invalid);
             if (invalid) {
                 addReplySds(c,sdsnew(invalid_hll_err));
                 return;
             }
+            // 重新更新缓存
             hdr->card[0] = card & 0xff;
             hdr->card[1] = (card >> 8) & 0xff;
             hdr->card[2] = (card >> 16) & 0xff;
@@ -1272,11 +1337,16 @@ void pfcountCommand(redisClient *c) {
             hdr->card[7] = (card >> 56) & 0xff;
             /* This is not considered a read-only command even if the
              * data structure is not modified, since the cached value
-             * may be modified and given that the HLL is a Redis string
+             * may be modified and given that the HLL is 
+             * 
+             * a Redis string
              * we need to propagate the change. */
+            // 键空间改动的钩子。 每当数据库中的键被改动时， signalModifiedKey() 函数都会被调用。
             signalModifiedKey(c->db,c->argv[1]);
+            // 修改次数加1
             server.dirty++;
         }
+        //返回一个整数回复
         addReplyLongLong(c,card);
     }
 }

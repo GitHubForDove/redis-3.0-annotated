@@ -42,7 +42,7 @@
 /*
  * 类型别名，用于指向 sdshdr 的 buf 属性
  */
-typedef char *sds;
+typedef char *sds; //  *sds == char 
 
 /*
  * 保存字符串对象的结构
@@ -118,6 +118,7 @@ sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen);
 sds sdsjoin(char **argv, int argc, char *sep);
 
 /* Low level functions exposed to the user API */
+/* 低层的功能 用来暴露给用户的API*/
 sds sdsMakeRoomFor(sds s, size_t addlen);
 void sdsIncrLen(sds s, int incr);
 sds sdsRemoveFreeSpace(sds s);

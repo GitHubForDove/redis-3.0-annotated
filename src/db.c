@@ -225,6 +225,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
     if (lookupKeyWrite(db,key) == NULL) {
         dbAdd(db,key,val);
     } else {
+        // 覆盖掉原来的值
         dbOverwrite(db,key,val);
     }
 

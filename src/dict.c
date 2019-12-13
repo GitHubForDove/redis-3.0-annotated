@@ -52,9 +52,9 @@
  * for Redis, as we use copy-on-write and don't want to move too much memory
  * around when there is a child performing saving operations.
  *
- * 通过 dictEnableResize() 和 dictDisableResize() 两个函数，
- * 程序可以手动地允许或阻止哈希表进行 rehash ，
- * 这在 Redis 使用子进程进行保存操作时，可以有效地利用 copy-on-write 机制。
+    * 通过 dictEnableResize() 和 dictDisableResize() 两个函数，
+    * 程序可以手动地允许或阻止哈希表进行 rehash ，
+    * 这在 Redis 使用子进程进行保存操作时，可以有效地利用 copy-on-write 机制。
  *
  * Note that even when dict_can_resize is set to 0, not all resizes are
  * prevented: a hash table is still allowed to grow if the ratio between
@@ -383,6 +383,7 @@ int dictRehash(dict *d, int n) {
         assert(d->ht[0].size > (unsigned)d->rehashidx);
 
         // 略过数组中为空的索引，找到下一个非空索引
+        // 
         while(d->ht[0].table[d->rehashidx] == NULL) d->rehashidx++;
 
         // 指向该索引的链表表头节点
@@ -401,10 +402,12 @@ int dictRehash(dict *d, int n) {
             h = dictHashKey(d, de->key) & d->ht[1].sizemask;
 
             // 插入节点到新哈希表
+            // 将在ht[0]的de指针和ht[1]对应的table[h]进行连接
             de->next = d->ht[1].table[h];
+            // 将节点复制到新哈希表中
             d->ht[1].table[h] = de;
 
-            // 更新计数器
+            // 更新计数器 将used属性变量每次都减少一个
             d->ht[0].used--;
             d->ht[1].used++;
 
@@ -533,7 +536,7 @@ dictEntry *dictAddRaw(dict *d, void *key)
     dictEntry *entry;
     dictht *ht;
 
-    // 如果条件允许的话，进行单步 rehash
+    // 如果条件允许的话，进行单步 rehash why?
     // T = O(1)
     if (dictIsRehashing(d)) _dictRehashStep(d);
 
@@ -678,9 +681,9 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
         // 遍历链表上的所有节点
         // T = O(1)
         while(he) {
-        
+            // 查找目标节点
             if (dictCompareKeys(d, key, he->key)) {
-                // 超找目标节点
+               
 
                 /* Unlink the element from the list */
                 // 从链表中删除
@@ -756,7 +759,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
     // T = O(N)
     for (i = 0; i < ht->size && ht->used > 0; i++) {
         dictEntry *he, *nextHe;
-
+        
         if (callback && (i & 65535) == 0) callback(d->privdata);
 
         // 跳过空索引

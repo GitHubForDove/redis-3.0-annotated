@@ -46,8 +46,9 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
  * 否则，返回普通的哈希表。
  */
 robj *setTypeCreate(robj *value) {
-
+    // 检查对象 o 中的值能否表示为 long long 类型：
     if (isObjectRepresentableAsLongLong(value,NULL) == REDIS_OK)
+        // 创建一个 INTSET 编码的集合对象
         return createIntsetObject();
 
     return createSetObject();
@@ -94,6 +95,7 @@ int setTypeAdd(robj *subject, robj *value) {
 
             /* The set *was* an intset and this value is not integer
              * encodable, so dictAdd should always work. */
+            // 将value添加到转换后的字典中
             redisAssertWithInfo(NULL,value,dictAdd(subject->ptr,value,NULL) == DICT_OK);
             incrRefCount(value);
             return 1;
@@ -451,6 +453,10 @@ void saddCommand(redisClient *c) {
     addReplyLongLong(c,added);
 }
 
+/**
+ * 移除集合中一个或多个成员
+ * 
+ */
 void sremCommand(redisClient *c) {
     robj *set;
     int j, deleted = 0, keyremoved = 0;
@@ -668,6 +674,11 @@ void spopCommand(redisClient *c) {
  */
 #define SRANDMEMBER_SUB_STRATEGY_MUL 3
 
+/**
+ * 如果 count 为正数，且小于集合基数，那么命令返回一个包含 count 个元素的数组，数组中的元素各不相同。
+ * 如果 count 大于等于集合基数，那么返回整个集合。
+ * 如果 count 为负数，那么命令返回一个数组，数组中的元素可能会重复出现多次，而数组的长度为 count 的绝对值。
+ */
 void srandmemberWithCountCommand(redisClient *c) {
     long l;
     unsigned long count, size;
@@ -874,6 +885,15 @@ void srandmemberWithCountCommand(redisClient *c) {
     }
 }
 
+/**
+ * SRANDMEMBER key [count]
+ * 返回集合中一个或多个随机数
+ * 
+ * 如果 count 为正数，且小于集合基数，那么命令返回一个包含 count 个元素的数组，数组中的元素各不相同。
+ * 如果 count 大于等于集合基数，那么返回整个集合。
+ * 如果 count 为负数，那么命令返回一个数组，数组中的元素可能会重复出现多次，而数组的长度为 count 的绝对值。
+ * 
+ */
 void srandmemberCommand(redisClient *c) {
     robj *set, *ele;
     int64_t llele;
@@ -884,7 +904,7 @@ void srandmemberCommand(redisClient *c) {
         srandmemberWithCountCommand(c);
         return;
 
-    // 参数错误
+    // 参数错误 命令 最多是三个参数
     } else if (c->argc > 3) {
         addReply(c,shared.syntaxerr);
         return;
